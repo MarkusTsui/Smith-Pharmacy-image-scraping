@@ -1,0 +1,25 @@
+{
+    "search_sources": {
+        "google_images": true,
+        "bing_images": true,
+        "amazon": true,
+        "unsplash": true,
+        "manufacturer_websites": true
+    },
+    "search_settings": {
+        "max_results_per_source": 5,
+        "min_image_size": [200, 200],
+        "preferred_formats": ["jpg", "jpeg", "png", "webp"],
+        "delay_between_requests": 1.0,
+        "max_retries": 3,
+        "test_mode": true,
+        "test_limit": 200
+    },
+    "output_settings": {
+        "save_images_locally": false,
+        "images_folder": "scraped_images",
+        "update_csv_with_urls": true,
+        "backup_original_csv": true,
+        "output_filename": "dataset/Full missing image product list_with_images_test.csv"
+    }
+}
