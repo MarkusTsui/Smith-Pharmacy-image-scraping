@@ -50,6 +50,47 @@ class ImageScraper:
         self.results = []
         self.downloaded_count = 0
         self.failed_count = 0
+        self.checkpoint_cfg = self.config.get('checkpoint', {
+            'enabled': False,
+            'resume': False,
+            'every_n_products': 20,
+            'file': 'dataset/scraper_checkpoint.json',
+        })
+
+    def load_checkpoint(self) -> Optional[Dict]:
+        """Load checkpoint data if enabled and present"""
+        try:
+            if self.checkpoint_cfg.get('enabled') and self.checkpoint_cfg.get('resume'):
+                checkpoint_file = self.checkpoint_cfg.get('file')
+                if checkpoint_file and os.path.exists(checkpoint_file):
+                    with open(checkpoint_file, 'r', encoding='utf-8') as f:
+                        return json.load(f)
+        except Exception as e:
+            logger.warning(f"Failed to load checkpoint: {e}")
+        return None
+
+    def save_checkpoint(self, data: Dict) -> None:
+        """Persist checkpoint data to disk if enabled"""
+        try:
+            if not self.checkpoint_cfg.get('enabled'):
+                return
+            checkpoint_file = self.checkpoint_cfg.get('file')
+            if not checkpoint_file:
+                return
+            os.makedirs(os.path.dirname(checkpoint_file), exist_ok=True)
+            with open(checkpoint_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to save checkpoint: {e}")
+
+    def clear_checkpoint(self) -> None:
+        """Remove checkpoint file on successful completion"""
+        try:
+            checkpoint_file = self.checkpoint_cfg.get('file')
+            if checkpoint_file and os.path.exists(checkpoint_file):
+                os.remove(checkpoint_file)
+        except Exception as e:
+            logger.warning(f"Failed to clear checkpoint: {e}")
         
     def load_config(self, config_file: str) -> Dict:
         """Load configuration from JSON file"""
@@ -430,17 +471,17 @@ class ImageScraper:
                 
             logger.info(f"Searching for: {query}")
             
-            # Search each enabled source
+            # Search each enabled source (ordered: Google -> Amazon -> others)
             if self.config['search_sources']['google_images']:
                 all_results.extend(self.search_google_images(query, self.config['search_settings']['max_results_per_source']))
                 time.sleep(self.config['search_settings']['delay_between_requests'])
             
-            if self.config['search_sources']['bing_images']:
-                all_results.extend(self.search_bing_images(query, self.config['search_settings']['max_results_per_source']))
-                time.sleep(self.config['search_settings']['delay_between_requests'])
-            
             if self.config['search_sources']['amazon']:
                 all_results.extend(self.search_amazon(query, self.config['search_settings']['max_results_per_source']))
+                time.sleep(self.config['search_settings']['delay_between_requests'])
+            
+            if self.config['search_sources']['bing_images']:
+                all_results.extend(self.search_bing_images(query, self.config['search_settings']['max_results_per_source']))
                 time.sleep(self.config['search_settings']['delay_between_requests'])
             
             if self.config['search_sources']['unsplash']:
@@ -471,10 +512,27 @@ class ImageScraper:
     def process_csv(self, input_file: str, output_file: str = None):
         """Process the CSV file and scrape images for each product"""
         if output_file is None:
-            if self.config['output_settings'].get('output_filename'):
-                output_file = self.config['output_settings']['output_filename']
+            output_cfg = self.config.get('output_settings', {})
+            base_name = output_cfg.get('output_filename')
+            if not base_name:
+                # derive from input name
+                base_name = os.path.basename(input_file).replace('.csv', '_with_images.csv')
+
+            # add timestamp if enabled
+            add_ts = bool(output_cfg.get('add_timestamp', False))
+            if add_ts:
+                from datetime import datetime
+                ts_fmt = output_cfg.get('timestamp_format', '%Y-%m-%d-%H%M')
+                name, ext = os.path.splitext(base_name)
+                base_name = f"{name}_{datetime.now().strftime(ts_fmt)}{ext}"
+
+            # prepend output directory if provided
+            output_dir = output_cfg.get('output_dir')
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+                output_file = os.path.join(output_dir, base_name)
             else:
-                output_file = input_file.replace('.csv', '_with_images.csv')
+                output_file = base_name
         
         # Backup original file
         if self.config['output_settings']['backup_original_csv']:
@@ -495,10 +553,21 @@ class ImageScraper:
             products = products[:test_limit]
             logger.info(f"TEST MODE: Processing only first {len(products)} products")
         
-        logger.info(f"Processing {len(products)} products...")
+        # Determine resume position
+        start_index = 1
+        ckpt = self.load_checkpoint()
+        if ckpt and ckpt.get('input_file') == input_file:
+            last_index = int(ckpt.get('last_index', 0))
+            if last_index >= 1:
+                start_index = last_index + 1
+                logger.info(f"RESUME: Continuing from product index {start_index}")
+
+        logger.info(f"Processing {len(products)} products (starting at index {start_index})...")
         
         # Process each product
         for i, product in enumerate(products, 1):
+            if i < start_index:
+                continue
             logger.info(f"Processing product {i}/{len(products)}: {product.get('Title', 'Unknown')}")
             
             # Skip if already has image
@@ -533,14 +602,22 @@ class ImageScraper:
                 logger.warning("No images found for this product")
                 self.failed_count += 1
             
-            # Save progress every 50 products in test mode, 100 in normal mode
-            save_interval = 50 if self.config['search_settings'].get('test_mode', False) else 100
+            # Save progress and checkpoint every N products
+            save_interval = int(self.checkpoint_cfg.get('every_n_products', 20))
             if i % save_interval == 0:
                 self.save_progress(products, output_file)
+                self.save_checkpoint({
+                    'input_file': input_file,
+                    'output_file': output_file,
+                    'last_index': i,
+                    'timestamp': int(time.time())
+                })
                 logger.info(f"Progress saved: {i} products processed")
         
         # Save final results
         self.save_progress(products, output_file)
+        # Clear checkpoint on success
+        self.clear_checkpoint()
         
         logger.info(f"Scraping completed!")
         logger.info(f"Total products processed: {len(products)}")

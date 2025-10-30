@@ -20,6 +20,15 @@
         "images_folder": "scraped_images",
         "update_csv_with_urls": true,
         "backup_original_csv": true,
-        "output_filename": "dataset/Full missing image product list_with_images_test.csv"
+        "output_filename": "Full missing image product list_with_images_test.csv",
+        "output_dir": "output",
+        "add_timestamp": true,
+        "timestamp_format": "%Y-%m-%d-%H%M"
+    },
+    "checkpoint": {
+        "enabled": true,
+        "resume": true,
+        "every_n_products": 20,
+        "file": "dataset/scraper_checkpoint.json"
     }
 }

@@ -62,3 +62,4 @@ Your scraper is ready to process all 5,269 products. The scraper will:
 5. Save progress every 100 products
 
 **Start scraping now by running one of the commands above!**
+
